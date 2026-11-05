@@ -1,0 +1,492 @@
+diff --git a/apps/pdfcraft-web/index.html b/apps/pdfcraft-web/index.html
+index 46b3a25e..6c7a2275 100644
+--- a/apps/pdfcraft-web/index.html
++++ b/apps/pdfcraft-web/index.html
+@@ -1,17 +1,53 @@
+-<!doctype html>
+-<html lang="en">
+-  <head>
+-    <meta charset="utf-8" />
+-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+-    <title>PdfCraft</title>
+-    <link data-trunk rel="rust" data-wasm-opt="z" />
+-    <style>
+-      html, body { margin: 0; height: 100%; overflow: hidden; background: #f1f1f3; }
+-      canvas { width: 100%; height: 100%; display: block; outline: none; }
+-      @media (prefers-color-scheme: dark) { html, body { background: #19191c; } }
+-    </style>
+-  </head>
+-  <body>
+-    <canvas id="pdfcraft"></canvas>
+-  </body>
+-</html>
++<!doctype html>
++<html lang="en">
++  <head>
++    <meta charset="utf-8" />
++    <meta name="viewport" content="width=device-width, initial-scale=1" />
++    <title>PdfCraft</title>
++    <link data-trunk rel="rust" data-wasm-opt="z" />
++    <style>
++    :root, [data-theme="dark"] {
++      --bg-base: #1f1f1f;
++      --bg-panel: #292929;
++      --text-main: #eeeeee;
++      --text-muted: #b0b0b0;
++      --accent: #3b5bdb;
++      --border: #3a3a3a;
++      --aurora-gradient: linear-gradient(135deg, #4facfe 0%, #9b72cb 35%, #d96570 70%, #f3a183 100%);
++      --aurora-subtle-glow: linear-gradient(135deg, rgba(79, 172, 254, 0.15), rgba(155, 114, 203, 0.15), rgba(217, 101, 112, 0.15));
++    }
++    [data-theme="light"] {
++      --bg-base: #f0f0f0;
++      --bg-panel: #ffffff;
++      --text-main: #242424;
++      --text-muted: #616161;
++      --accent: #3b5bdb;
++      --border: #e1e1e1;
++    }
++    [data-theme="aurora"] {
++      --bg-base: #0b0d14;
++      --bg-panel: #131622;
++      --text-main: #e4e6eb;
++      --text-muted: #8b92a5;
++      --accent: #9b72cb;
++      --border: #272c40;
++      --aurora-gradient: linear-gradient(135deg, #4facfe 0%, #9b72cb 35%, #d96570 70%, #f3a183 100%);
++      --aurora-subtle-glow: linear-gradient(135deg, rgba(79, 172, 254, 0.15), rgba(155, 114, 203, 0.15), rgba(217, 101, 112, 0.15));
++    }
++      html, body { margin: 0; height: 100%; overflow: hidden; background: var(--bg-base, #f1f1f3); }
++      canvas { width: 100%; height: 100%; display: block; outline: none; }
++      @media (prefers-color-scheme: dark) { html, body { background: #19191c; } }
++    </style>
++    <script>
++    (function() {
++      try {
++        var theme = localStorage.getItem("artcraft_theme") || "dark";
++        document.documentElement.setAttribute("data-theme", theme);
++      } catch (e) {}
++    })();
++  </script>
++</head>
++  <body>
++    <canvas id="pdfcraft"></canvas>
++  </body>
++</html>
+diff --git a/crates/ui-egui/Cargo.toml b/crates/ui-egui/Cargo.toml
+index 7f164991..c80aca29 100644
+--- a/crates/ui-egui/Cargo.toml
++++ b/crates/ui-egui/Cargo.toml
+@@ -24,6 +24,7 @@ pdfcraft-content = { workspace = true }
+ pdfcraft-render = { workspace = true }
+ pdfcraft-model = { workspace = true }
+ pdfcraft-platform = { workspace = true }
++ureq = { version = "3.5", features = ["rustls"] }
+ egui = { workspace = true, features = ["bytemuck", "default_fonts", "monochrome_emoji_fonts"] }
+ egui_extras = { workspace = true }
+ eframe = { workspace = true, features = ["default_fonts", "wgpu", "accesskit", "persistence", "links", "clipboard"] }
+diff --git a/crates/ui-egui/src/app.rs b/crates/ui-egui/src/app.rs
+index 4de70f3d..6eef88cd 100644
+--- a/crates/ui-egui/src/app.rs
++++ b/crates/ui-egui/src/app.rs
+@@ -65,6 +65,8 @@ impl PdfCraftApp {
+     /// Construct an application with the default session, panels, theme and control state.
+     pub fn new() -> Self {
+         Self {
++            artcraft_drive: crate::artcraft_drive::ArtCraftDrive::new("PdfCraft", "pdf"),
++            artcraft_agent: crate::artcraft_agent::ArtCraftAgent::new(),
+             session: Session::new(),
+             views: Vec::new(),
+             closed_tabs: Vec::new(),
+@@ -88,9 +90,16 @@ impl PdfCraftApp {
+             space_hand: None,
+             full_screen_tool: None,
+             comment_prefs: Default::default(),
+-            theme: ThemeKind::Light,
+-            // A fresh install follows the desktop's appearance (#1248); saved settings override.
+-            theme_preference: ThemePreference::System,
++            theme: match crate::artcraft_theme::AppTheme::load_global() {
++                crate::artcraft_theme::AppTheme::Light => ThemeKind::Light,
++                crate::artcraft_theme::AppTheme::Aurora => ThemeKind::Aurora,
++                crate::artcraft_theme::AppTheme::Dark => ThemeKind::Dark,
++            },
++            theme_preference: match crate::artcraft_theme::AppTheme::load_global() {
++                crate::artcraft_theme::AppTheme::Light => ThemePreference::Light,
++                crate::artcraft_theme::AppTheme::Aurora => ThemePreference::Aurora,
++                crate::artcraft_theme::AppTheme::Dark => ThemePreference::Dark,
++            },
+             reading_colors: Default::default(),
+             show_page_edge_shadows: true,
+             #[cfg(target_os = "linux")]
+@@ -401,8 +410,12 @@ impl PdfCraftApp {
+             self.pin_tool(id)
+         }
+     }
++
++    /// Polls and executes AI Agent tool calls on the main thread for PdfCraft.
+ }
+ 
++include!("artcraft_mcp.rs");
++
+ impl eframe::App for PdfCraftApp {
+     /// While files are dragged over the window the system sends no pointer moves, so egui
+     /// would keep the place the pointer entered at: tell it where the pointer really is, so the
+@@ -558,6 +571,8 @@ impl eframe::App for PdfCraftApp {
+             self.control = Some(control);
+         }
+         self.guard_quit(ctx);
++        self.poll_artcraft_agent();
++        self.artcraft_autosave_tick();
+         // macOS: quit through `terminate:` instead of dropping the window (Touch Bar crash, #1136).
+         #[cfg(target_os = "macos")]
+         craft_quit::on_close_request(ctx);
+@@ -670,6 +685,55 @@ impl eframe::App for PdfCraftApp {
+         }
+         side_panels::show(self, ui);
+         let t = theme::Tokens::get(&ctx);
++        let doc_summary = if let Some(i) = self.active {
++            let lbl = crate::canvas::tab_label(self, i).unwrap_or_else(|| "PDF-Dokument".into());
++            let (cur, total) = self.views.get(i).map_or((1, 1), |v| (v.current + 1, v.page_count().max(1)));
++            format!("PDF: {lbl} | Seite {cur} von {total}")
++        } else {
++            "Startbildschirm (Kein PDF geöffnet — wird bei Befehl automatisch erstellt)".into()
++        };
++        let proj_dir = self.artcraft_drive.active_project_dir().to_string_lossy().to_string();
++        egui::Panel::bottom("pdfcraft_footer")
++            .exact_size(28.0)
++            .frame(egui::Frame::NONE.fill(t.chrome).inner_margin(egui::Margin::symmetric(12, 0)).stroke(egui::Stroke::new(1.0, t.border)))
++            .show(ui, |ui| {
++                ui.horizontal_centered(|ui| {
++                    let status_txt = if let Some(idx) = self.active {
++                        let lbl = crate::canvas::tab_label(self, idx).unwrap_or_else(|| "Document.pdf".into());
++                        format!("Ready — {lbl}")
++                    } else {
++                        "Ready — PdfCraft".to_string()
++                    };
++                    ui.label(egui::RichText::new(status_txt).size(12.0).color(t.text_muted));
++                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
++                        let mut cur_theme = match self.theme_preference {
++                            theme::ThemePreference::Light => crate::artcraft_theme::AppTheme::Light,
++                            theme::ThemePreference::Aurora => crate::artcraft_theme::AppTheme::Aurora,
++                            _ => crate::artcraft_theme::AppTheme::Dark,
++                        };
++                        if crate::artcraft_theme::render_theme_switcher_dropdown(ui, &mut cur_theme) {
++                            let pref = match cur_theme {
++                                crate::artcraft_theme::AppTheme::Light => theme::ThemePreference::Light,
++                                crate::artcraft_theme::AppTheme::Aurora => theme::ThemePreference::Aurora,
++                                crate::artcraft_theme::AppTheme::Dark => theme::ThemePreference::Dark,
++                            };
++                            self.theme_preference = pref;
++                            self.sync_theme(ui.ctx());
++                        }
++                        if self.active.is_some() {
++                            ui.add_space(10.0);
++                            if ui.small_button("+").on_hover_text("Zoom In").clicked() {
++                                self.execute("view.zoom.in");
++                            }
++                            ui.label(egui::RichText::new("100%").size(11.5).color(t.text_muted));
++                            if ui.small_button("−").on_hover_text("Zoom Out").clicked() {
++                                self.execute("view.zoom.out");
++                            }
++                        }
++                    });
++                });
++            });
++        self.artcraft_agent.render_sidebar(ui, &doc_summary, &proj_dir);
+         egui::CentralPanel::default().frame(egui::Frame::NONE.fill(t.pasteboard)).show(ui, |ui| {
+             if self.mode == Mode::AllTools && self.all_tools_full {
+                 all_tools_ui::show(self, ui);
+diff --git a/crates/ui-egui/src/chrome.rs b/crates/ui-egui/src/chrome.rs
+index aa6233c1..97badd14 100644
+--- a/crates/ui-egui/src/chrome.rs
++++ b/crates/ui-egui/src/chrome.rs
+@@ -23,7 +23,7 @@ const MAC_LIGHTS_LEFT: f32 = 10.0;
+ /// lights plus the same gap the lights keep from the top of the window.
+ pub const MAC_CONTENT_LEFT: f32 = MAC_LIGHTS_LEFT + 2.0 * MAC_LIGHT_PITCH + MAC_LIGHT + (MAC_TITLE_BAR - MAC_LIGHT) / 2.0;
+ /// The strip and its controls everywhere else.
+-const TAB_STRIP: f32 = 38.0;
++const TAB_STRIP: f32 = 40.0;
+ const TAB_HEIGHT: f32 = 30.0;
+ const STRIP_BUTTON: f32 = 28.0;
+ 
+@@ -290,35 +290,33 @@ pub fn tab_strip(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                     if icons::button(ui, "settings", button, false, tl!("Preferences")).clicked() {
+                         app.execute("app.preferences");
+                     }
+-                    let (icon, label) = match app.theme_preference {
+-                        ThemePreference::System => ("monitor", tl!("Use system setting")),
+-                        ThemePreference::Light => ("sun", tl!("Light gray")),
+-                        ThemePreference::Dark => ("moon", tl!("Dark gray")),
+-                    };
+-                    let tip = format!("{}: {label}", tl!("Display theme"));
+-                    let response = icons::button(ui, icon, button, false, &tip);
+-                    // A click cycles System, Light, Dark; a right-click opens the menu.
+-                    if response.clicked() {
+-                        app.execute(match app.theme_preference {
+-                            ThemePreference::System => "view.theme.light",
+-                            ThemePreference::Light => "view.theme.dark",
+-                            ThemePreference::Dark => "view.theme.system",
+-                        });
+-                    }
+-                    egui::Popup::context_menu(&response).id(response.id.with("theme_menu")).show(|ui| appearance_menu(app, ui));
++                    // Unified Craft Theme Switcher (Dark / Light / Aurora)
+                     if icons::button(ui, "circle-help", button, false, tl!("Keyboard shortcuts")).clicked() {
+                         app.dialog = Some(Dialog::Shortcuts);
+                     }
+                     // One click to the community, from anywhere in the app.
+-                    if widgets::ghost_button_sized(ui, "messages-square", "Discord", tab_h).on_hover_text(pdfcraft_engine::links::DISCORD).clicked() {
+-                        app.execute("help.discord");
+-                    }
++                    // Discord removed
++
++                    // Unified Top-Right Action Bar: ✓ Auto-Save | ● Google Drive: Active (G:) | ✨ AI Agent
++                    let drive_active = app.artcraft_drive.is_drive_detected();
++                    let proj_name = app.artcraft_drive.active_project_folder_name();
++                    let proj_dir = app.artcraft_drive.active_project_dir();
++                    crate::artcraft_theme::render_top_right_action_bar(
++                        ui,
++                        &mut app.artcraft_drive.auto_save_enabled,
++                        drive_active,
++                        &proj_name,
++                        &proj_dir,
++                        &mut app.artcraft_agent.is_open,
++                    );
++                    ui.add_space(8.0);
+                 });
+             });
+         });
+ }
+ 
+ /// The right-click menu on the title bar's theme button.
++#[allow(dead_code)]
+ fn appearance_menu(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+     if ui.button(tl!("Appearance settings…")).clicked() {
+         app.dialog = Some(Dialog::Preferences);
+diff --git a/crates/ui-egui/src/commands.rs b/crates/ui-egui/src/commands.rs
+index 08d2040e..75191c15 100644
+--- a/crates/ui-egui/src/commands.rs
++++ b/crates/ui-egui/src/commands.rs
+@@ -334,6 +334,7 @@ impl PdfCraftApp {
+             "view.theme.system" => self.set_theme_preference(ThemePreference::System),
+             "view.theme.light" => self.set_theme_preference(ThemePreference::Light),
+             "view.theme.dark" => self.set_theme_preference(ThemePreference::Dark),
++            "view.theme.aurora" => self.set_theme_preference(ThemePreference::Aurora),
+             "view.fit_visible" => {
+                 if let Some(i) = self.active
+                     && let Err(e) = self.fit_visible(i)
+diff --git a/crates/ui-egui/src/dialogs/appearance.rs b/crates/ui-egui/src/dialogs/appearance.rs
+index 48ad0cb3..2baf8865 100644
+--- a/crates/ui-egui/src/dialogs/appearance.rs
++++ b/crates/ui-egui/src/dialogs/appearance.rs
+@@ -16,6 +16,7 @@ fn mode_label(preference: ThemePreference) -> &'static str {
+         ThemePreference::System => "Use system setting",
+         ThemePreference::Light => "Light",
+         ThemePreference::Dark => "Dark",
++        ThemePreference::Aurora => "Aurora",
+     }
+ }
+ 
+@@ -24,6 +25,7 @@ fn mode_command(preference: ThemePreference) -> &'static str {
+         ThemePreference::System => "view.theme.system",
+         ThemePreference::Light => "view.theme.light",
+         ThemePreference::Dark => "view.theme.dark",
++        ThemePreference::Aurora => "view.theme.aurora",
+     }
+ }
+ 
+@@ -120,9 +122,15 @@ pub fn preferences_section(ui: &mut egui::Ui, app: &mut PdfCraftApp, t: &Tokens)
+     ui.horizontal(|ui| {
+         let label = ui.label(tl!("Appearance mode"));
+         let combo = craft_ui::ComboBox::from_id_salt("appearance-mode").selected_text(tl!(mode_label(app.theme_preference))).show_ui(ui, |ui| {
+-            for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark] {
++            for preference in [ThemePreference::System, ThemePreference::Light, ThemePreference::Dark, ThemePreference::Aurora] {
+                 if ui.selectable_label(app.theme_preference == preference, tl!(mode_label(preference))).clicked() {
+                     app.execute(mode_command(preference));
++                    let global = match preference {
++                        ThemePreference::Light => crate::artcraft_theme::AppTheme::Light,
++                        ThemePreference::Aurora => crate::artcraft_theme::AppTheme::Aurora,
++                        _ => crate::artcraft_theme::AppTheme::Dark,
++                    };
++                    crate::artcraft_theme::AppTheme::save_global(global);
+                     ui.close();
+                 }
+             }
+diff --git a/crates/ui-egui/src/editing/save.rs b/crates/ui-egui/src/editing/save.rs
+index f685247c..3f735e8c 100644
+--- a/crates/ui-egui/src/editing/save.rs
++++ b/crates/ui-egui/src/editing/save.rs
+@@ -122,7 +122,7 @@ impl PdfCraftApp {
+     /// `pending_overwrite` behind [`Dialog::OverwriteChanged`](crate::Dialog::OverwriteChanged).
+     /// Returns `true` if written now.
+     #[cfg(not(target_arch = "wasm32"))]
+-    fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
++    pub(crate) fn save_doc_to_then(&mut self, id: pdfcraft_engine::DocId, dest: &str, target: SaveTarget, after: Box<dyn FnOnce(&mut Self) + Send>) -> bool {
+         let own = self.session.get(id).and_then(|d| d.path.as_deref()).is_some_and(|p| crate::same_file(p, dest));
+         if own && self.watch.disk_differs(id, dest, self.session.get(id).map(|d| d.saved_bytes())) {
+             self.pending_overwrite = Some(PendingOverwrite { id, dest: dest.to_string(), target, after });
+diff --git a/crates/ui-egui/src/home.rs b/crates/ui-egui/src/home.rs
+index 4f5ac9de..079ed1d4 100644
+--- a/crates/ui-egui/src/home.rs
++++ b/crates/ui-egui/src/home.rs
+@@ -83,7 +83,7 @@ pub fn show(app: &mut PdfCraftApp, ui: &mut egui::Ui) {
+                     .font(theme::regular(14.0)),
+             );
+             ui.add_space(14.0);
+-            if !app.community_card_closed {
++            if false {
+                 egui::Frame::NONE
+                     .fill(t.card)
+                     .stroke(Stroke::new(1.0, t.border))
+diff --git a/crates/ui-egui/src/lib.rs b/crates/ui-egui/src/lib.rs
+index ab5d1334..80ec3d1a 100644
+--- a/crates/ui-egui/src/lib.rs
++++ b/crates/ui-egui/src/lib.rs
+@@ -34,6 +34,9 @@ macro_rules! tl_ctx {
+         $crate::i18n::tr_ctx($crate::i18n::current(), $context, $s)
+     };
+ }
++pub mod artcraft_agent;
++pub mod artcraft_theme;
++pub mod artcraft_drive;
+ pub mod canvas;
+ mod chrome;
+ mod image_engine;
+@@ -249,6 +252,8 @@ struct PendingOpen {
+ }
+ 
+ pub struct PdfCraftApp {
++    pub artcraft_drive: artcraft_drive::ArtCraftDrive,
++    pub artcraft_agent: artcraft_agent::ArtCraftAgent,
+     /// Tools side and pane widths; which panes are open is `left_open` and `right`.
+     pub side_panels: side_panels::SidePanels,
+     pub session: Session,
+diff --git a/crates/ui-egui/src/theme.rs b/crates/ui-egui/src/theme.rs
+index c3ce3e0e..5bd05a91 100644
+--- a/crates/ui-egui/src/theme.rs
++++ b/crates/ui-egui/src/theme.rs
+@@ -11,6 +11,7 @@ pub enum ThemeKind {
+     #[default]
+     Light,
+     Dark,
++    Aurora,
+ }
+ 
+ /// The saved user choice, independent of the light/dark colours currently displayed. A fresh
+@@ -21,6 +22,7 @@ pub enum ThemePreference {
+     System,
+     Light,
+     Dark,
++    Aurora,
+ }
+ 
+ impl ThemePreference {
+@@ -30,6 +32,7 @@ impl ThemePreference {
+         match self {
+             Self::Light => ThemeKind::Light,
+             Self::Dark => ThemeKind::Dark,
++            Self::Aurora => ThemeKind::Aurora,
+             Self::System => match system {
+                 Some(true) => ThemeKind::Dark,
+                 Some(false) => ThemeKind::Light,
+@@ -97,38 +100,62 @@ impl Tokens {
+             },
+             ThemeKind::Dark => Self {
+                 kind,
+-                titlebar: Color32::from_rgb(0x1B, 0x1B, 0x1E),
+-                chrome: Color32::from_rgb(0x26, 0x26, 0x2A),
+-                panel: Color32::from_rgb(0x26, 0x26, 0x2A),
+-                pasteboard: Color32::from_rgb(0x19, 0x19, 0x1C),
+-                card: Color32::from_rgb(0x2E, 0x2E, 0x33),
+-                border: Color32::from_rgb(0x3C, 0x3C, 0x43),
+-                divider: Color32::from_rgb(0x33, 0x33, 0x39),
+-                text: Color32::from_rgb(0xEC, 0xEC, 0xEF),
+-                text_muted: Color32::from_rgb(0xAE, 0xAE, 0xB6),
+-                text_faint: Color32::from_rgb(0x97, 0x97, 0x9E),
+-                icon: Color32::from_rgb(0xD4, 0xD4, 0xDA),
+-                hover: Color32::from_rgb(0x34, 0x34, 0x3A),
+-                pressed: Color32::from_rgb(0x3E, 0x3E, 0x45),
+-                selected: Color32::from_rgb(0x23, 0x3A, 0x63),
++                titlebar: Color32::from_rgb(0x12, 0x12, 0x14),
++                chrome: Color32::from_rgb(0x18, 0x18, 0x1B),
++                panel: Color32::from_rgb(0x18, 0x18, 0x1B),
++                pasteboard: Color32::from_rgb(0x12, 0x12, 0x14),
++                card: Color32::from_rgb(0x20, 0x20, 0x24),
++                border: Color32::from_rgb(0x27, 0x27, 0x2A),
++                divider: Color32::from_rgb(0x27, 0x27, 0x2A),
++                text: Color32::from_rgb(0xED, 0xED, 0xED),
++                text_muted: Color32::from_rgb(0xA1, 0xA1, 0xAA),
++                text_faint: Color32::from_rgb(0x71, 0x71, 0x7A),
++                icon: Color32::from_rgb(0xA1, 0xA1, 0xAA),
++                hover: Color32::from_rgb(0x27, 0x27, 0x2A),
++                pressed: Color32::from_rgb(0x32, 0x32, 0x38),
++                selected: Color32::from_rgb(0x28, 0x28, 0x30),
+                 accent: Color32::from_rgb(0x4B, 0x8B, 0xF5),
+                 accent_text: Color32::from_rgb(0x8C, 0xB6, 0xFA),
+                 accent_soft: Color32::from_rgb(0x24, 0x36, 0x57),
+-                field: Color32::from_rgb(0x1E, 0x1E, 0x22),
++                field: Color32::from_rgb(0x20, 0x20, 0x24),
+                 badge_new: Color32::from_rgb(0x3D, 0x7D, 0xEE),
+                 page_shadow: Color32::from_black_alpha(120),
+                 radius: 6,
+             },
++            ThemeKind::Aurora => Self {
++                kind,
++                titlebar: Color32::from_rgb(0x09, 0x0B, 0x14),
++                chrome: Color32::from_rgb(0x0F, 0x13, 0x22),
++                panel: Color32::from_rgb(0x0F, 0x13, 0x22),
++                pasteboard: Color32::from_rgb(0x09, 0x0B, 0x14),
++                card: Color32::from_rgb(0x16, 0x1B, 0x30),
++                border: Color32::from_rgba_unmultiplied(139, 92, 246, 56),
++                divider: Color32::from_rgba_unmultiplied(139, 92, 246, 40),
++                text: Color32::from_rgb(0xF1, 0xF3, 0xF9),
++                text_muted: Color32::from_rgb(0x94, 0xA3, 0xB8),
++                text_faint: Color32::from_rgb(0x64, 0x74, 0x8B),
++                icon: Color32::from_rgb(0x94, 0xA3, 0xB8),
++                hover: Color32::from_rgb(0x1E, 0x24, 0x40),
++                pressed: Color32::from_rgb(0x28, 0x30, 0x56),
++                selected: Color32::from_rgba_unmultiplied(168, 85, 247, 50),
++                accent: Color32::from_rgb(0xA8, 0x55, 0xF7),
++                accent_text: Color32::from_rgb(0xC0, 0x84, 0xFC),
++                accent_soft: Color32::from_rgba_unmultiplied(168, 85, 247, 40),
++                field: Color32::from_rgb(0x16, 0x1B, 0x30),
++                badge_new: Color32::from_rgb(0xA8, 0x55, 0xF7),
++                page_shadow: Color32::from_black_alpha(150),
++                radius: 6,
++            },
+         }
+     }
+ 
+     /// Return the cached theme tokens, falling back to the light palette before the first apply.
+     pub fn get(ctx: &egui::Context) -> Self {
+-        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::unique("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
++        ctx.data(|d| d.get_temp::<Tokens>(egui::Id::new("pdfcraft-theme"))).unwrap_or_else(|| Self::for_kind(ThemeKind::Light))
+     }
+ 
+     pub fn dark(&self) -> bool {
+-        self.kind == ThemeKind::Dark
++        self.kind == ThemeKind::Dark || self.kind == ThemeKind::Aurora
+     }
+ }
+ 
+@@ -409,6 +436,12 @@ fn font_definitions_for_platform(prefer_hans: bool, platform: FontPolicyPlatform
+         stack.extend(fallback.iter().cloned());
+         fonts.families.insert(FontFamily::Name(fam.into()), stack);
+     }
++    #[cfg(target_os = "windows")]
++    if let Ok(bytes) = std::fs::read(r"C:\Windows\Fonts\seguiemj.ttf") {
++        fonts.font_data.insert("seguiemj".into(), std::sync::Arc::new(FontData::from_owned(bytes)));
++        fonts.families.entry(FontFamily::Proportional).or_default().push("seguiemj".into());
++        fonts.families.entry(FontFamily::Monospace).or_default().push("seguiemj".into());
++    }
+     fonts
+ }
+ 
+@@ -430,7 +463,7 @@ pub fn apply(ctx: &egui::Context, kind: ThemeKind) {
+     ctx.set_theme(egui::ThemePreference::System);
+     let rtl = crate::i18n::current().rtl();
+     let t = Tokens::for_kind(kind);
+-    ctx.data_mut(|d| d.insert_temp(egui::Id::unique("pdfcraft-theme"), t));
++    ctx.data_mut(|d| d.insert_temp(egui::Id::new("pdfcraft-theme"), t));
+     let mut v = if t.dark() { Visuals::dark() } else { Visuals::light() };
+     v.panel_fill = t.panel;
+     v.window_fill = t.card;

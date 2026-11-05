@@ -1,0 +1,26 @@
+{
+  "plugin_name": "PDFCraft-Plugin",
+  "target_application": "PDFCraft",
+  "upstream_repository": "https://github.com/storytold/pdfcraft",
+  "tested_vanilla_commit": "76260bb6a5032fd9ab3cfd364add751c3f80b828",
+  "tested_vanilla_commit_subject": "fix(xfa): scripts come only from the XDP's own packets and quote the date pattern (#5987)",
+  "tested_vanilla_commit_date": "2026-11-03 14:33:41 -0500",
+  "standalone_plugin_modules": [
+    "crates/ui-egui/src/artcraft_agent.rs",
+    "crates/ui-egui/src/artcraft_mcp.rs",
+    "crates/ui-egui/src/artcraft_drive.rs",
+    "crates/ui-egui/src/artcraft_theme.rs"
+  ],
+  "hooked_vanilla_files": [
+    "apps/pdfcraft-web/index.html",
+    "crates/ui-egui/Cargo.toml",
+    "crates/ui-egui/src/app.rs",
+    "crates/ui-egui/src/chrome.rs",
+    "crates/ui-egui/src/commands.rs",
+    "crates/ui-egui/src/dialogs/appearance.rs",
+    "crates/ui-egui/src/editing/save.rs",
+    "crates/ui-egui/src/home.rs",
+    "crates/ui-egui/src/lib.rs",
+    "crates/ui-egui/src/theme.rs"
+  ]
+}
